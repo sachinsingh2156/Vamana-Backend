@@ -1,28 +1,56 @@
-version: "3.8"
-
 services:
   mongodb:
-    image: mongo:latest
+    image: mongo:7
     container_name: vamana_mongodb
-    restart: always
-    ports:
-      - "27018:27017"
+    restart: unless-stopped
     environment:
       MONGO_INITDB_ROOT_USERNAME: admin
       MONGO_INITDB_ROOT_PASSWORD: password
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mongosh",
+          "--quiet",
+          "-u",
+          "admin",
+          "-p",
+          "password",
+          "--authenticationDatabase",
+          "admin",
+          "--eval",
+          "db.adminCommand('ping').ok",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   backend:
     build: .
-    container_name: my_node_backend
-    restart: always
+    container_name: vamana_backend
+    restart: unless-stopped
     ports:
       - "3000:3000"
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
     environment:
-      MongoURI: mongodb://admin:password@mongodb:27017/mydatabase?authSource=admin
+      PORT: "3000"
+      MongoURI: mongodb://admin:password@mongodb:27017/VamanaDB?authSource=admin
+
+  # Shares the backend network namespace so Cloudflare "localhost:3000" keeps working.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: vamana_cloudflared
+    restart: unless-stopped
+    network_mode: "service:backend"
+    depends_on:
+      - backend
+    # Force HTTP/2 — many networks (campus/Wi‑Fi) block QUIC/UDP 7844
+    command: tunnel --no-autoupdate run --protocol http2 --token ${CLOUDFLARE_TUNNEL_TOKEN}
 
 volumes:
   mongo_data:
